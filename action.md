@@ -135,14 +135,84 @@ final/checkpoint-100000_8/traj_125_four_panel.mp4
 ### `my-outputs/`
 
 - Trạng thái cũ: một số file output/checkpoint metadata đang được Git track.
-- Trạng thái mới: bỏ khỏi Git index bằng `git rm -r --cached my-outputs`, giữ file local trên máy.
-- Lý do: GitHub chỉ nên chứa code, docs và output curated trong `final/`.
+- Trạng thái mới: bỏ nội dung thật khỏi Git index bằng `git rm -r --cached my-outputs`, giữ file local trên máy; sau đó track lại skeleton folder bằng `README.md` và `.gitkeep`.
+- Lý do: GitHub chỉ nên chứa code, docs, output curated trong `final/`, và khung folder để người sau biết đặt output vào đâu.
 
 Lệnh đã chạy:
 
 ```bash
 git rm -r --cached my-outputs
 ```
+
+## Cập nhật skeleton folder 2026-06-09
+
+Sau phản hồi của người dùng, cần giữ khung thư mục để người clone repo chỉ cần copy dataset/checkpoint vào đúng chỗ là chạy được.
+
+### `.gitignore`
+
+- Trạng thái cũ: ignore toàn bộ `my-outputs/` và `checkpoints/`.
+- Trạng thái mới: ignore nội dung thật nhưng unignore README/`.gitkeep` cho skeleton.
+- Lý do: giữ cấu trúc folder trên GitHub mà không upload checkpoint, dataset hoặc output thô.
+
+Code mới chính:
+
+```gitignore
+my-outputs/*
+!my-outputs/README.md
+!my-outputs/open_loop_eval/
+my-outputs/open_loop_eval/*
+!my-outputs/open_loop_eval/.gitkeep
+
+checkpoints/*
+!checkpoints/README.md
+!checkpoints/checkpoint-50000/
+checkpoints/checkpoint-50000/*
+!checkpoints/checkpoint-50000/.gitkeep
+```
+
+### `demo_data/.gitignore`
+
+- Trạng thái cũ: `*`, ignore toàn bộ data mới trong `demo_data`.
+- Trạng thái mới: vẫn ignore data thật, nhưng cho phép track skeleton `pick_and_put_v4_converted`.
+- Lý do: dataset custom không được upload, nhưng folder đích cần hiện sẵn.
+
+Code mới chính:
+
+```gitignore
+*
+!pick_and_put_v4_converted/
+pick_and_put_v4_converted/*
+!pick_and_put_v4_converted/README.md
+!pick_and_put_v4_converted/data/
+pick_and_put_v4_converted/data/*
+!pick_and_put_v4_converted/data/.gitkeep
+```
+
+### Folder skeleton mới
+
+```text
+checkpoints/README.md
+checkpoints/checkpoint-50000/.gitkeep
+checkpoints/checkpoint-100000/.gitkeep
+checkpoints/checkpoint-150000/.gitkeep
+checkpoints/checkpoint-200000/.gitkeep
+
+demo_data/pick_and_put_v4_converted/README.md
+demo_data/pick_and_put_v4_converted/data/.gitkeep
+demo_data/pick_and_put_v4_converted/meta/.gitkeep
+demo_data/pick_and_put_v4_converted/videos/.gitkeep
+
+my-outputs/README.md
+my-outputs/experiment_cfg/.gitkeep
+my-outputs/processor/.gitkeep
+my-outputs/open_loop_eval/.gitkeep
+my-outputs/mujoco_four_panel_eval/.gitkeep
+my-outputs/mujoco_four_panel_eval_smoth/.gitkeep
+```
+
+### `README.md`
+
+- Trạng thái mới: bổ sung hướng dẫn rằng repo chỉ track skeleton folder; người dùng cần copy dataset/checkpoint thật vào các folder có sẵn.
 
 ---
 

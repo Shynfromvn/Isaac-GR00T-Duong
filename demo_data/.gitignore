@@ -1,1 +1,13 @@
 *
+!pick_and_put_v4_converted/
+pick_and_put_v4_converted/*
+!pick_and_put_v4_converted/README.md
+!pick_and_put_v4_converted/data/
+pick_and_put_v4_converted/data/*
+!pick_and_put_v4_converted/data/.gitkeep
+!pick_and_put_v4_converted/meta/
+pick_and_put_v4_converted/meta/*
+!pick_and_put_v4_converted/meta/.gitkeep
+!pick_and_put_v4_converted/videos/
+pick_and_put_v4_converted/videos/*
+!pick_and_put_v4_converted/videos/.gitkeep

@@ -81,6 +81,17 @@ checkpoints/
 
 The `checkpoints/` directory is ignored by git.
 
+The custom dataset is expected locally under:
+
+```text
+demo_data/pick_and_put_v4_converted/
+├── meta/
+├── data/
+└── videos/
+```
+
+This repo tracks the folder skeleton and small README files for `checkpoints/`, `demo_data/pick_and_put_v4_converted/`, and `my-outputs/`, but it does not track the real checkpoint weights, dataset parquet/video files, or generated evaluation outputs. After cloning, copy your dataset and checkpoints into those existing folders and the commands below should run without recreating the layout.
+
 ## Open-Loop Evaluation
 
 ```bash
