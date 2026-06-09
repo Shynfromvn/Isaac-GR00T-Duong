@@ -48,6 +48,8 @@ def plot_trajectory_results(
     state_joints_across_time: np.ndarray,
     gt_action_across_time: np.ndarray,
     pred_action_across_time: np.ndarray,
+    filtered_pred_action_across_time: np.ndarray | None,
+    filtered_pred_action_label: str,
     traj_id: int,
     state_keys: list[str],
     action_keys: list[str],
@@ -100,7 +102,14 @@ def plot_trajectory_results(
         if state_joints_across_time.shape == gt_action_across_time.shape:
             ax.plot(state_joints_across_time[:, action_idx], label="state joints")
         ax.plot(gt_action_across_time[:, action_idx], label="gt action")
-        ax.plot(pred_action_across_time[:, action_idx], label="pred action")
+        if filtered_pred_action_across_time is None:
+            ax.plot(pred_action_across_time[:, action_idx], label="pred action")
+        else:
+            ax.plot(pred_action_across_time[:, action_idx], label="pred action raw", alpha=0.35)
+            ax.plot(
+                filtered_pred_action_across_time[:, action_idx],
+                label=filtered_pred_action_label,
+            )
 
         # put a dot every ACTION_HORIZON
         for j in range(0, actual_steps, action_horizon):
@@ -124,6 +133,97 @@ def plot_trajectory_results(
     plt.savefig(save_plot_path)
 
     plt.close()  # Close the figure to free memory
+
+
+def _smoothing_alpha(cutoff: np.ndarray | float, freq: float) -> np.ndarray | float:
+    tau = 1.0 / (2.0 * np.pi * cutoff)
+    te = 1.0 / freq
+    return 1.0 / (1.0 + tau / te)
+
+
+class OneEuroVectorFilter:
+    """One Euro filter for a vector action stream."""
+
+    def __init__(
+        self,
+        freq: float,
+        min_cutoff: float,
+        beta: float,
+        d_cutoff: float,
+    ) -> None:
+        if freq <= 0.0:
+            raise ValueError(f"freq must be positive, got {freq}")
+        if min_cutoff <= 0.0:
+            raise ValueError(f"min_cutoff must be positive, got {min_cutoff}")
+        if d_cutoff <= 0.0:
+            raise ValueError(f"d_cutoff must be positive, got {d_cutoff}")
+
+        self.freq = float(freq)
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
+        self.prev_x: np.ndarray | None = None
+        self.prev_x_hat: np.ndarray | None = None
+        self.prev_dx_hat: np.ndarray | None = None
+
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=np.float32)
+        if self.prev_x is None:
+            self.prev_x = x.copy()
+            self.prev_x_hat = x.copy()
+            self.prev_dx_hat = np.zeros_like(x)
+            return x.copy()
+
+        dx = (x - self.prev_x) * self.freq
+        d_alpha = _smoothing_alpha(self.d_cutoff, self.freq)
+        dx_hat = d_alpha * dx + (1.0 - d_alpha) * self.prev_dx_hat
+
+        cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)
+        alpha = _smoothing_alpha(cutoff, self.freq)
+        x_hat = alpha * x + (1.0 - alpha) * self.prev_x_hat
+
+        self.prev_x = x.copy()
+        self.prev_x_hat = x_hat.copy()
+        self.prev_dx_hat = dx_hat.copy()
+        return x_hat.astype(np.float32)
+
+
+def apply_one_euro_filter(
+    action_across_time: np.ndarray,
+    freq: float,
+    min_cutoff: float,
+    beta: float,
+    d_cutoff: float,
+) -> np.ndarray:
+    action_filter = OneEuroVectorFilter(
+        freq=freq,
+        min_cutoff=min_cutoff,
+        beta=beta,
+        d_cutoff=d_cutoff,
+    )
+    return np.stack([action_filter(action) for action in action_across_time], axis=0)
+
+
+def apply_action_delta_clip(action_across_time: np.ndarray, max_delta: float) -> np.ndarray:
+    if max_delta <= 0.0:
+        raise ValueError(f"max_delta must be positive, got {max_delta}")
+
+    clipped_actions = []
+    prev_action = None
+    for action in action_across_time:
+        action = np.asarray(action, dtype=np.float32)
+        if prev_action is None:
+            clipped_action = action.copy()
+        else:
+            clipped_action = np.clip(
+                action,
+                prev_action - max_delta,
+                prev_action + max_delta,
+            )
+        clipped_actions.append(clipped_action)
+        prev_action = clipped_action
+
+    return np.stack(clipped_actions, axis=0).astype(np.float32)
 
 
 def parse_observation_gr00t(
@@ -160,6 +260,12 @@ def evaluate_single_trajectory(
     steps=300,
     action_horizon=16,
     save_plot_path=None,
+    smooth_actions=False,
+    one_euro_freq=30.0,
+    one_euro_min_cutoff=1.0,
+    one_euro_beta=0.05,
+    one_euro_d_cutoff=1.0,
+    action_delta_clip=0.0,
 ):
     # Ensure steps doesn't exceed trajectory length
     traj = loader[traj_id]
@@ -220,11 +326,40 @@ def evaluate_single_trajectory(
         f"gt_action: {gt_action_across_time.shape}, pred_action: {pred_action_across_time.shape}"
     )
 
+    filtered_pred_action_across_time = None
+    filtered_pred_action_label = "pred action one-euro"
+    if smooth_actions:
+        filter_input_action_across_time = pred_action_across_time
+        if action_delta_clip > 0.0:
+            filter_input_action_across_time = apply_action_delta_clip(
+                pred_action_across_time,
+                max_delta=action_delta_clip,
+            )
+            filtered_pred_action_label = "pred action clipped+one-euro"
+
+        filtered_pred_action_across_time = apply_one_euro_filter(
+            filter_input_action_across_time,
+            freq=one_euro_freq,
+            min_cutoff=one_euro_min_cutoff,
+            beta=one_euro_beta,
+            d_cutoff=one_euro_d_cutoff,
+        )
+
     # calc MSE and MAE across time
     mse = np.mean((gt_action_across_time - pred_action_across_time) ** 2)
     mae = np.mean(np.abs(gt_action_across_time - pred_action_across_time))
     logging.info(f"Unnormalized Action MSE across single traj: {mse}")
     logging.info(f"Unnormalized Action MAE across single traj: {mae}")
+    if filtered_pred_action_across_time is not None:
+        if action_delta_clip > 0.0:
+            clipped_mse = np.mean((gt_action_across_time - filter_input_action_across_time) ** 2)
+            clipped_mae = np.mean(np.abs(gt_action_across_time - filter_input_action_across_time))
+            logging.info(f"Delta-clipped Action MSE across single traj: {clipped_mse}")
+            logging.info(f"Delta-clipped Action MAE across single traj: {clipped_mae}")
+        filtered_mse = np.mean((gt_action_across_time - filtered_pred_action_across_time) ** 2)
+        filtered_mae = np.mean(np.abs(gt_action_across_time - filtered_pred_action_across_time))
+        logging.info(f"One Euro filtered Action MSE across single traj: {filtered_mse}")
+        logging.info(f"One Euro filtered Action MAE across single traj: {filtered_mae}")
 
     logging.info(f"state_joints vs time {state_joints_across_time.shape}")
     logging.info(f"gt_action_joints vs time {gt_action_across_time.shape}")
@@ -235,6 +370,8 @@ def evaluate_single_trajectory(
         state_joints_across_time=state_joints_across_time,
         gt_action_across_time=gt_action_across_time,
         pred_action_across_time=pred_action_across_time,
+        filtered_pred_action_across_time=filtered_pred_action_across_time,
+        filtered_pred_action_label=filtered_pred_action_label,
         traj_id=traj_id,
         state_keys=state_keys,
         action_keys=action_keys,
@@ -281,6 +418,24 @@ class ArgsConfig:
 
     modality_keys: list[str] | None = None
     """List of modality keys to plot. If None, plot all keys."""
+
+    smooth_actions: bool = False
+    """Apply One Euro filtering to predicted actions in the open-loop plot."""
+
+    one_euro_freq: float = 30.0
+    """Sampling frequency for One Euro filtering. Use dataset FPS for per-step actions."""
+
+    one_euro_min_cutoff: float = 1.0
+    """Minimum cutoff frequency for One Euro filtering; lower values smooth more at low speed."""
+
+    one_euro_beta: float = 0.05
+    """Speed coefficient for One Euro filtering; higher values reduce lag on fast changes."""
+
+    one_euro_d_cutoff: float = 1.0
+    """Cutoff frequency for the derivative used by One Euro filtering."""
+
+    action_delta_clip: float = 0.0
+    """If positive, clip per-step predicted action deltas before One Euro filtering."""
 
 
 def main(args: ArgsConfig):
@@ -351,6 +506,12 @@ def main(args: ArgsConfig):
             steps=args.steps,
             action_horizon=args.action_horizon,
             save_plot_path=args.save_plot_path,
+            smooth_actions=args.smooth_actions,
+            one_euro_freq=args.one_euro_freq,
+            one_euro_min_cutoff=args.one_euro_min_cutoff,
+            one_euro_beta=args.one_euro_beta,
+            one_euro_d_cutoff=args.one_euro_d_cutoff,
+            action_delta_clip=args.action_delta_clip,
         )
         logging.info(f"MSE for trajectory {traj_id}: {mse}, MAE: {mae}")
         all_mse.append(mse)

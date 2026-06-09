@@ -273,25 +273,17 @@ class LeRobotEpisodeLoader:
                     "Only single timestep is supported for language modality"
                 )
 
-        # Build mapping from config video keys to dataset modality_meta video keys.
-        # This handles the case where the model's pretrained config uses different
-        # video key names than the dataset's modality.json (e.g., N1.6 vs N1.7 naming).
+        # Require config video keys to match dataset modality keys. The underlying
+        # storage key remains available through each modality.json "original_key".
         self._video_key_mapping: dict[str, str] = {}
         if "video" in modality_configs and "video" in self.modality_meta:
             config_keys = modality_configs["video"].modality_keys
             meta_keys = list(self.modality_meta["video"].keys())
-            needs_mapping = any(k not in self.modality_meta["video"] for k in config_keys)
-            if needs_mapping:
-                assert len(config_keys) == len(meta_keys), (
-                    f"Cannot auto-map video keys: config has {len(config_keys)} keys "
-                    f"{config_keys} but dataset modality meta has {len(meta_keys)} keys "
-                    f"{meta_keys}. Counts must match for positional mapping."
-                )
-                for config_key, meta_key in zip(config_keys, meta_keys):
-                    self._video_key_mapping[config_key] = meta_key
-                logging.warning(
-                    f"Video key mismatch between model config and dataset. "
-                    f"Auto-mapping by position: {self._video_key_mapping}"
+            missing_keys = [key for key in config_keys if key not in self.modality_meta["video"]]
+            if missing_keys:
+                raise ValueError(
+                    "Video modality keys must match dataset meta/modality.json keys. "
+                    f"Missing keys: {missing_keys}. Dataset video keys: {meta_keys}."
                 )
 
         return modality_configs

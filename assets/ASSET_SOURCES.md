@@ -78,4 +78,4 @@ mujoco.MjModel.from_xml_path("assets/lerobot_unitree_g1_mujoco/assets/g1_29dof_w
 OK: nq=50, nv=49, nu=43, njnt=44
 ```
 
-Ghi chu: day la model duoc dung cho video three-panel vi dataset co 28D arm+Dex3 hand action. `scene_43dof.xml` co `global_view` va `head_camera`, nhung script replay dung free camera gan hon de thay ro tay.
+Ghi chu: day la model duoc dung cho video four-panel vi dataset co head/wrist cameras va action G1 Dex3. `scene_43dof.xml` co `global_view` va `head_camera`, nhung script replay dung free camera gan hon de thay ro tay.

@@ -97,10 +97,10 @@ DATASET_TO_MJ_JOINT = {
 
 @dataclass
 class ArgsConfig:
-    dataset_path: str = "demo_data/G1_Dex3_PickApple_Dataset_HeadcamOnly"
-    """Dataset that provides head_cam video, state, action, and task text."""
+    dataset_path: str = "demo_data/pick_and_put_v4_converted"
+    """Dataset that provides head/wrist video, state, action, and task text."""
 
-    model_path: str | None = "my-outputs/checkpoint-100000"
+    model_path: str | None = "checkpoints/checkpoint-200000"
     """Local checkpoint. Leave empty only when using --host/--port policy server."""
 
     embodiment_tag: str = "NEW_EMBODIMENT"
@@ -109,7 +109,7 @@ class ArgsConfig:
     mujoco_model_path: str = "assets/lerobot_unitree_g1_mujoco/assets/scene_43dof.xml"
     """MuJoCo XML with G1 body29+hand14 model."""
 
-    output_dir: str = "my-outputs/mujoco_three_panel_eval"
+    output_dir: str = "my-outputs/mujoco_four_panel_eval"
     """Directory for mp4 videos, per-step CSV files, and summary.json."""
 
     traj_ids: list[int] = field(default_factory=list)
@@ -163,15 +163,49 @@ class ArgsConfig:
     video_backend: str = "torchcodec"
     """Dataset video backend."""
 
+    smooth_actions: bool = False
+    """Apply One Euro filtering to predicted actions before MuJoCo replay."""
 
-def _load_joint_names(dataset_path: Path) -> list[str]:
+    one_euro_freq: float = 30.0
+    """Sampling frequency for One Euro filtering. Use dataset FPS for per-step actions."""
+
+    one_euro_min_cutoff: float = 1.0
+    """Minimum cutoff frequency for One Euro filtering; lower values smooth more at low speed."""
+
+    one_euro_beta: float = 0.05
+    """Speed coefficient for One Euro filtering; higher values reduce lag on fast changes."""
+
+    one_euro_d_cutoff: float = 1.0
+    """Cutoff frequency for the derivative used by One Euro filtering."""
+
+    action_delta_clip: float = 0.0
+    """If positive, clip per-step predicted action deltas before One Euro filtering."""
+
+
+def _load_joint_names(dataset_path: Path, action_keys: list[str]) -> list[str]:
     info_path = dataset_path / "meta" / "info.json"
     with info_path.open("r", encoding="utf-8") as f:
         info = json.load(f)
     names = info.get("features", {}).get("action", {}).get("names")
-    if names and names[0]:
-        return list(names[0])
-    return DEFAULT_DATASET_JOINT_NAMES
+    all_names = list(names[0]) if names and names[0] else DEFAULT_DATASET_JOINT_NAMES
+
+    modality_path = dataset_path / "meta" / "modality.json"
+    with modality_path.open("r", encoding="utf-8") as f:
+        modality_meta = json.load(f)
+    action_meta = modality_meta.get("action", {})
+
+    selected_names = []
+    for key in action_keys:
+        if key not in action_meta:
+            raise ValueError(
+                f"Action key {key!r} is missing from {modality_path}. "
+                f"Available action keys: {list(action_meta)}."
+            )
+        start = int(action_meta[key]["start"])
+        end = int(action_meta[key]["end"])
+        selected_names.extend(all_names[start:end])
+
+    return selected_names
 
 
 def _create_policy(args: ArgsConfig) -> BasePolicy:
@@ -253,6 +287,95 @@ def _concat_action(action: dict[str, np.ndarray], action_keys: list[str], step: 
     return np.concatenate(parts, axis=0).astype(np.float32)
 
 
+def _smoothing_alpha(cutoff: np.ndarray | float, freq: float) -> np.ndarray | float:
+    tau = 1.0 / (2.0 * np.pi * cutoff)
+    te = 1.0 / freq
+    return 1.0 / (1.0 + tau / te)
+
+
+class OneEuroVectorFilter:
+    """One Euro filter for a vector action stream."""
+
+    def __init__(
+        self,
+        freq: float,
+        min_cutoff: float,
+        beta: float,
+        d_cutoff: float,
+    ) -> None:
+        if freq <= 0.0:
+            raise ValueError(f"freq must be positive, got {freq}")
+        if min_cutoff <= 0.0:
+            raise ValueError(f"min_cutoff must be positive, got {min_cutoff}")
+        if d_cutoff <= 0.0:
+            raise ValueError(f"d_cutoff must be positive, got {d_cutoff}")
+
+        self.freq = float(freq)
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
+        self.prev_x: np.ndarray | None = None
+        self.prev_x_hat: np.ndarray | None = None
+        self.prev_dx_hat: np.ndarray | None = None
+
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=np.float32)
+        if self.prev_x is None:
+            self.prev_x = x.copy()
+            self.prev_x_hat = x.copy()
+            self.prev_dx_hat = np.zeros_like(x)
+            return x.copy()
+
+        dx = (x - self.prev_x) * self.freq
+        d_alpha = _smoothing_alpha(self.d_cutoff, self.freq)
+        dx_hat = d_alpha * dx + (1.0 - d_alpha) * self.prev_dx_hat
+
+        cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)
+        alpha = _smoothing_alpha(cutoff, self.freq)
+        x_hat = alpha * x + (1.0 - alpha) * self.prev_x_hat
+
+        self.prev_x = x.copy()
+        self.prev_x_hat = x_hat.copy()
+        self.prev_dx_hat = dx_hat.copy()
+        return x_hat.astype(np.float32)
+
+
+class StreamingActionSmoother:
+    """Apply optional delta clipping and One Euro filtering step by step."""
+
+    def __init__(self, args: ArgsConfig) -> None:
+        self.enabled = args.smooth_actions
+        self.action_delta_clip = float(args.action_delta_clip)
+        if self.action_delta_clip < 0.0:
+            raise ValueError(f"action_delta_clip must be non-negative, got {self.action_delta_clip}")
+        self.prev_clipped_action: np.ndarray | None = None
+        self.filter = OneEuroVectorFilter(
+            freq=args.one_euro_freq,
+            min_cutoff=args.one_euro_min_cutoff,
+            beta=args.one_euro_beta,
+            d_cutoff=args.one_euro_d_cutoff,
+        )
+
+    def __call__(self, action: np.ndarray) -> np.ndarray:
+        action = np.asarray(action, dtype=np.float32)
+        if not self.enabled:
+            return action
+
+        filter_input = action
+        if self.action_delta_clip > 0.0:
+            if self.prev_clipped_action is None:
+                filter_input = action.copy()
+            else:
+                filter_input = np.clip(
+                    action,
+                    self.prev_clipped_action - self.action_delta_clip,
+                    self.prev_clipped_action + self.action_delta_clip,
+                )
+            self.prev_clipped_action = filter_input.copy()
+
+        return self.filter(filter_input)
+
+
 def _extract_vector(traj: Any, step: int, keys: list[str], prefix: str) -> np.ndarray:
     parts = []
     safe_step = min(max(step, 0), len(traj) - 1)
@@ -283,6 +406,11 @@ def _set_pose(model: Any, data: Any, action_vec: np.ndarray, qpos_map: dict[int,
     data.qpos[:] = 0.0
     if model.nq >= 7:
         data.qpos[0:7] = np.array([0.0, 0.0, 0.78, 1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    if len(action_vec) < len(qpos_map):
+        raise ValueError(
+            f"Action vector has {len(action_vec)} values, but MuJoCo qpos map expects "
+            f"{len(qpos_map)} joints. Check meta/modality.json action slices."
+        )
     for dataset_idx, qpos_addr in qpos_map.items():
         data.qpos[qpos_addr] = float(action_vec[dataset_idx])
     mujoco.mj_forward(model, data)
@@ -336,6 +464,7 @@ def _write_episode(
     embodiment_tag = EmbodimentTag.resolve(args.embodiment_tag)
     modality_configs = policy.get_modality_config()
     action_keys = loader.modality_configs["action"].modality_keys
+    video_keys = loader.modality_configs["video"].modality_keys
     traj = loader[traj_id]
     steps = min(args.max_steps, len(traj))
 
@@ -344,19 +473,40 @@ def _write_episode(
     renderer = mujoco.Renderer(model, height=args.height, width=args.width)
     recorder = VideoRecorder.create_h264(fps=args.fps, crf=22, input_pix_fmt="rgb24")
 
-    video_path = output_dir / f"traj_{traj_id}_three_panel.mp4"
-    csv_path = output_dir / f"traj_{traj_id}_three_panel.csv"
+    video_path = output_dir / f"traj_{traj_id}_four_panel.mp4"
+    csv_path = output_dir / f"traj_{traj_id}_four_panel.csv"
     recorder.start(video_path)
 
     pred_cache: list[np.ndarray] = []
+    action_smoother = StreamingActionSmoother(args)
     inference_ms: list[float] = []
     action_l2_errors: list[float] = []
     action_mae_errors: list[float] = []
+    raw_action_l2_errors: list[float] = []
+    raw_action_mae_errors: list[float] = []
+
+    required_video_keys = ["head_cam", "left_wrist_cam"]
+    missing_video_keys = [key for key in required_video_keys if key not in video_keys]
+    if missing_video_keys:
+        raise ValueError(
+            f"Missing required video keys {missing_video_keys}. "
+            f"Expected canonical keys {required_video_keys}, got {video_keys}."
+        )
+    head_cam_key = "head_cam"
+    wrist_cam_key = "left_wrist_cam"
 
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["step", "inference_ms", "action_l2_error", "action_mae_error"],
+            fieldnames=[
+                "step",
+                "inference_ms",
+                "raw_action_l2_error",
+                "raw_action_mae_error",
+                "action_l2_error",
+                "action_mae_error",
+                "action_is_smoothed",
+            ],
         )
         writer.writeheader()
 
@@ -382,34 +532,54 @@ def _write_episode(
                 elapsed_ms = 0.0
 
             gt_action = _extract_vector(traj, step, list(action_keys), "action")
-            pred_action = pred_cache.pop(0)
+            raw_pred_action = pred_cache.pop(0)
+            pred_action = action_smoother(raw_pred_action)
             _set_pose(model, gt_data, gt_action, qpos_map)
             _set_pose(model, pred_data, pred_action, qpos_map)
 
-            head_frame = _resize_rgb(traj["video.head_cam"].iloc[step], (args.width, args.height))
+            # Get both camera frames from dataset
+            head_frame = _resize_rgb(traj[f"video.{head_cam_key}"].iloc[step], (args.width, args.height))
+            wrist_frame = _resize_rgb(traj[f"video.{wrist_cam_key}"].iloc[step], (args.width, args.height))
             gt_frame = _render(renderer, gt_data, args)
             pred_frame = _render(renderer, pred_data, args)
 
+            raw_l2_error = float(np.linalg.norm(gt_action - raw_pred_action))
+            raw_mae_error = float(np.mean(np.abs(gt_action - raw_pred_action)))
             l2_error = float(np.linalg.norm(gt_action - pred_action))
             mae_error = float(np.mean(np.abs(gt_action - pred_action)))
+            raw_action_l2_errors.append(raw_l2_error)
+            raw_action_mae_errors.append(raw_mae_error)
             action_l2_errors.append(l2_error)
             action_mae_errors.append(mae_error)
             writer.writerow(
                 {
                     "step": step,
                     "inference_ms": elapsed_ms if elapsed_ms else "",
+                    "raw_action_l2_error": raw_l2_error,
+                    "raw_action_mae_error": raw_mae_error,
                     "action_l2_error": l2_error,
                     "action_mae_error": mae_error,
+                    "action_is_smoothed": args.smooth_actions,
                 }
             )
 
             subtitle = f"traj={traj_id} step={step}/{steps - 1}"
-            panels = [
-                _caption(head_frame, "DATASET HEAD_CAM", subtitle),
+            # Create 2x2 layout: head cam | wrist cam on top row, GT | Pred on bottom row
+            top_row = np.concatenate([
+                _caption(head_frame, "DATASET HEAD CAM", subtitle),
+                _caption(wrist_frame, "DATASET WRIST CAM", subtitle),
+            ], axis=1)
+            bottom_row = np.concatenate([
                 _caption(gt_frame, "MUJOCO G1 GROUND TRUTH", "dataset action replay"),
-                _caption(pred_frame, "MUJOCO G1 PREDICTED", f"L2={l2_error:.3f} MAE={mae_error:.3f}"),
-            ]
-            recorder.write_frame(np.concatenate(panels, axis=1))
+                _caption(
+                    pred_frame,
+                    "MUJOCO G1 PREDICTED SMOOTHED"
+                    if args.smooth_actions
+                    else "MUJOCO G1 PREDICTED",
+                    f"L2={l2_error:.3f} MAE={mae_error:.3f}",
+                ),
+            ], axis=1)
+            recorder.write_frame(np.concatenate([top_row, bottom_row], axis=0))
 
     recorder.stop()
     renderer.close()
@@ -419,8 +589,15 @@ def _write_episode(
         "steps": steps,
         "video_path": str(video_path),
         "per_step_csv": str(csv_path),
+        "mean_raw_action_l2_error": float(np.mean(raw_action_l2_errors))
+        if raw_action_l2_errors
+        else 0.0,
+        "mean_raw_action_mae_error": float(np.mean(raw_action_mae_errors))
+        if raw_action_mae_errors
+        else 0.0,
         "mean_action_l2_error": float(np.mean(action_l2_errors)) if action_l2_errors else 0.0,
         "mean_action_mae_error": float(np.mean(action_mae_errors)) if action_mae_errors else 0.0,
+        "action_is_smoothed": args.smooth_actions,
         "mean_inference_ms": float(np.mean(inference_ms)) if inference_ms else 0.0,
         "dataset_joint_names": dataset_joint_names,
     }
@@ -441,13 +618,14 @@ def main(args: ArgsConfig) -> None:
     )
 
     model = mujoco.MjModel.from_xml_path(args.mujoco_model_path)
-    dataset_joint_names = _load_joint_names(Path(args.dataset_path))
+    action_keys = list(loader.modality_configs["action"].modality_keys)
+    dataset_joint_names = _load_joint_names(Path(args.dataset_path), action_keys)
     qpos_map = _qpos_addresses(model, dataset_joint_names)
     traj_ids = _resolve_traj_ids(args, len(loader))
 
     summaries = []
     for traj_id in traj_ids:
-        logging.info("Rendering three-panel MuJoCo replay for traj_id=%s", traj_id)
+        logging.info("Rendering four-panel MuJoCo replay for traj_id=%s", traj_id)
         summaries.append(
             _write_episode(
                 args=args,
@@ -471,13 +649,27 @@ def main(args: ArgsConfig) -> None:
         "num_trajs": args.num_trajs,
         "all_trajs": args.all_trajs,
         "action_horizon": args.action_horizon,
-        "panel_order": ["dataset_head_cam", "mujoco_ground_truth_replay", "mujoco_predicted_replay"],
+        "smoothing": {
+            "enabled": args.smooth_actions,
+            "one_euro_freq": args.one_euro_freq,
+            "one_euro_min_cutoff": args.one_euro_min_cutoff,
+            "one_euro_beta": args.one_euro_beta,
+            "one_euro_d_cutoff": args.one_euro_d_cutoff,
+            "action_delta_clip": args.action_delta_clip,
+        },
+        "panel_order": [
+            "dataset_head_cam",
+            "dataset_wrist_cam",
+            "mujoco_ground_truth_replay",
+            "mujoco_predicted_replay",
+        ],
+        "panel_layout": "2x2",
         "episodes": summaries,
     }
     summary_path = output_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
-    print(f"Saved three-panel videos to: {output_dir}")
+    print(f"Saved four-panel videos to: {output_dir}")
 
 
 if __name__ == "__main__":
