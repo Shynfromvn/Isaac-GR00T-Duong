@@ -127,6 +127,7 @@ checkpoints/
 File public:
 
 ```text
+final/spotlight_mujoco_four_panel.gif
 final/checkpoint-50000_8.jpeg
 final/checkpoint-50000_16.jpeg
 final/checkpoint-100000_8.jpeg
@@ -137,6 +138,28 @@ final/checkpoint-50000_8/traj_125_four_panel.mp4
 final/checkpoint-100000_8/traj_5_four_panel.mp4
 final/checkpoint-100000_8/traj_25_four_panel.mp4
 final/checkpoint-100000_8/traj_125_four_panel.mp4
+```
+
+### Spotlight demo GIF
+
+- Cập nhật 2026-06-09: tạo một GIF preview ngắn từ video MuJoCo để README có điểm nhấn hiển thị trực tiếp, còn MP4 đầy đủ vẫn để dạng link.
+- Lý do: GitHub README không render MP4 local đáng tin cậy như video player, nhưng GIF render ổn như ảnh động.
+
+Lệnh đã chạy:
+
+```bash
+ffmpeg -y -ss 0 -t 8 \
+  -i final/checkpoint-50000_8/traj_5_four_panel.mp4 \
+  -vf 'fps=8,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5' \
+  final/spotlight_mujoco_four_panel.gif
+```
+
+Code README mới:
+
+```markdown
+![MuJoCo four-panel replay spotlight](final/spotlight_mujoco_four_panel.gif)
+
+Full MP4: [checkpoint-50000 traj_5_four_panel.mp4](final/checkpoint-50000_8/traj_5_four_panel.mp4)
 ```
 
 ### `my-outputs/`
