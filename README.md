@@ -32,11 +32,10 @@ The original GR00T project is from NVIDIA. This fork keeps the upstream model an
 
 The curated result files are stored in `final/`. Large raw experiment folders and checkpoints are intentionally not tracked.
 
-### Spotlight Demo
+
 
 ![MuJoCo four-panel replay spotlight](final/spotlight_mujoco_four_panel.gif)
 
-Full MP4: [checkpoint-50000 traj_5_four_panel.mp4](final/checkpoint-50000_8/traj_5_four_panel.mp4)
 
 ### Open-Loop Plots
 
@@ -59,6 +58,9 @@ GitHub README rendering works reliably with relative image/file links. The video
 | checkpoint-100000 | 5 | [traj_5_four_panel.mp4](final/checkpoint-100000_8/traj_5_four_panel.mp4) |
 | checkpoint-100000 | 25 | [traj_25_four_panel.mp4](final/checkpoint-100000_8/traj_25_four_panel.mp4) |
 | checkpoint-100000 | 125 | [traj_125_four_panel.mp4](final/checkpoint-100000_8/traj_125_four_panel.mp4) |
+| checkpoint-200000 | 5 | [traj_5_four_panel.mp4](final/checkpoint-200000_8/traj_5_four_panel.mp4) |
+| checkpoint-200000 | 25 | [traj_25_four_panel.mp4](final/checkpoint-200000_8/traj_25_four_panel.mp4) |
+| checkpoint-200000 | 125 | [traj_125_four_panel.mp4](final/checkpoint-200000_8/traj_125_four_panel.mp4) |
 
 ## Setup
 

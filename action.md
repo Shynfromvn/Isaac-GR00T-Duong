@@ -138,7 +138,12 @@ final/checkpoint-50000_8/traj_125_four_panel.mp4
 final/checkpoint-100000_8/traj_5_four_panel.mp4
 final/checkpoint-100000_8/traj_25_four_panel.mp4
 final/checkpoint-100000_8/traj_125_four_panel.mp4
+final/checkpoint-200000_8/traj_5_four_panel.mp4
+final/checkpoint-200000_8/traj_25_four_panel.mp4
+final/checkpoint-200000_8/traj_125_four_panel.mp4
 ```
+
+Cập nhật 2026-06-09: bổ sung 3 video MuJoCo four-panel của `checkpoint-200000` vào README và `final/checkpoint-200000_8/`.
 
 ### Spotlight demo GIF
 
