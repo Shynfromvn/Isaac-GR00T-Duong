@@ -36,10 +36,10 @@ The curated result files are stored in `final/`. Large raw experiment folders an
 
 | Checkpoint | Plot |
 |---|---|
-| checkpoint-50000, horizon 8 | ![checkpoint-50000 horizon 8](final/checkpoint-50000_8.jpeg) |
-| checkpoint-50000, horizon 16 | ![checkpoint-50000 horizon 16](final/checkpoint-50000_16.jpeg) |
-| checkpoint-100000, horizon 8 | ![checkpoint-100000 horizon 8](final/checkpoint-100000_8.jpeg) |
-| checkpoint-200000, horizon 8 | ![checkpoint-200000 horizon 8](final/checkpoint-200000_8.jpeg) |
+| checkpoint-50000, horizon 8 | [checkpoint-50000_8.jpeg](final/checkpoint-50000_8.jpeg) |
+| checkpoint-50000, horizon 16 | [checkpoint-50000_16.jpeg](final/checkpoint-50000_16.jpeg) |
+| checkpoint-100000, horizon 8 | [checkpoint-100000_8.jpeg](final/checkpoint-100000_8.jpeg) |
+| checkpoint-200000, horizon 8 | [checkpoint-200000_8.jpeg](final/checkpoint-200000_8.jpeg) |
 
 ### MuJoCo Four-Panel Videos
 

@@ -64,6 +64,7 @@ https://docs.github.com/articles/relative-links-in-readmes
 - Trạng thái cũ từ NVIDIA: README giới thiệu chung Isaac GR00T N1.7 upstream.
 - Trạng thái mới: README riêng cho `Isaac-GR00T-Duong`, mô tả dataset/checkpoint G1 Dex3, open-loop smoothing, MuJoCo four-panel replay, lệnh chạy và gallery output.
 - Lý do: repo GitHub cần cho người xem hiểu đúng đây là fork local cho Unitree G1 Dex3 pick-and-put.
+- Cập nhật 2026-06-09: đổi open-loop plot từ ảnh embed sang link thường để README không bị kéo quá dài trên trang chính.
 
 Code cũ từ NVIDIA:
 
@@ -88,6 +89,12 @@ Fork of NVIDIA Isaac GR00T N1.7 for a custom Unitree G1 Dex3 pick-and-put workfl
 ![checkpoint-50000 horizon 8](final/checkpoint-50000_8.jpeg)
 ...
 [traj_5_four_panel.mp4](final/checkpoint-50000_8/traj_5_four_panel.mp4)
+```
+
+Code mới sau cập nhật link ảnh:
+
+```markdown
+| checkpoint-50000, horizon 8 | [checkpoint-50000_8.jpeg](final/checkpoint-50000_8.jpeg) |
 ```
 
 ### `.gitignore`
